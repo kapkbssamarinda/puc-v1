@@ -299,7 +299,7 @@ export default function App() {
                   <button className="btn btn-secondary btn-sm" onClick={handlePDFExport}><FileText size={12} />PDF</button>
                 </div>
               </div>
-              <ResultsDashboard result={result} />
+              <ResultsDashboard result={result} assumptions={assumptions} company={company} />
             </>
           )}
 

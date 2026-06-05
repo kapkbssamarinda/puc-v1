@@ -106,13 +106,13 @@ export function calcEmployeePUC(employee, assumptions) {
 
   // PV of accumulated benefit obligation (untuk karyawan yang survive ke pensiun)
   const probSurviveToRetirement = decrementTable[decrementTable.length - 1].lx;
-  const pvRetirementBenefit = (unitCredit * accumulatedUnits) *
+  const pvRetirementDBO = (unitCredit * accumulatedUnits) *
     probSurviveToRetirement *
     Math.pow(1 + discountRate, -yearsToRetirement);
 
-  // PV of benefits payable due to decrements before retirement (death, disability, resignation)
-  let pvPreRetirementBenefits = 0;
-  let pvPreRetirementDBO = 0; // accumulated portion only
+  // PV of DBO for decrements before retirement (death, disability, resignation)
+  // Hanya porsi yang sudah terakumulasi (accrued) sesuai PSAK 219 PUC method.
+  let pvPreRetirementDBO = 0;
 
   for (const row of decrementTable) {
     if (row.age >= retirementAge) break;
@@ -121,31 +121,48 @@ export function calcEmployeePUC(employee, assumptions) {
     const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseRate);
     const discountFactor = Math.pow(1 + discountRate, -(yearsFromNow + 0.5)); // mid-year
 
-    // Death benefit
-    const deathBenefit = calcDeathBenefit(salaryAtDecrement, serviceAtDecrement);
-    pvPreRetirementBenefits += row.lx * row.qm * deathBenefit * discountFactor;
-
-    // Disability benefit
-    const disabilityBenefit = calcDisabilityBenefit(salaryAtDecrement, serviceAtDecrement);
-    pvPreRetirementBenefits += row.lx * row.qd * disabilityBenefit * discountFactor;
-
-    // Resignation benefit
-    const resignBenefit = calcResignationBenefit(salaryAtDecrement, serviceAtDecrement);
-    pvPreRetirementBenefits += row.lx * row.qw * resignBenefit * discountFactor;
-
-    // DBO portion (accumulated unit only) for pre-retirement decrements
-    const accUnitAtDecrement = totalService > 0
-      ? (unitCredit * Math.min(serviceAtDecrement, pastService))
+    // Porsi benefit yang sudah terakumulasi pada tanggal valuasi.
+    // min(pastService, serviceAtDecrement) = pastService karena serviceAtDecrement >= pastService.
+    const accrualFraction = totalService > 0
+      ? Math.min(pastService, serviceAtDecrement) / totalService
       : 0;
-    pvPreRetirementDBO += row.lx * (row.qm + row.qd) *
-      accUnitAtDecrement * discountFactor;
-    pvPreRetirementDBO += row.lx * row.qw *
-      (calcResignationBenefit(salaryAtDecrement, serviceAtDecrement) / Math.max(serviceAtDecrement, 1) * Math.min(serviceAtDecrement, pastService)) *
-      discountFactor;
+
+    // Death benefit — Pasal 57 PP 35/2021
+    const deathBenefit = calcDeathBenefit(salaryAtDecrement, serviceAtDecrement);
+    pvPreRetirementDBO += row.lx * row.qm * deathBenefit * accrualFraction * discountFactor;
+
+    // Disability benefit — Pasal 56 ayat 4 PP 35/2021
+    const disabilityBenefit = calcDisabilityBenefit(salaryAtDecrement, serviceAtDecrement);
+    pvPreRetirementDBO += row.lx * row.qd * disabilityBenefit * accrualFraction * discountFactor;
+
+    // Resignation benefit — hanya UPMK + UPH, tidak ada UP
+    const resignBenefit = calcResignationBenefit(salaryAtDecrement, serviceAtDecrement);
+    pvPreRetirementDBO += row.lx * row.qw * resignBenefit * accrualFraction * discountFactor;
   }
 
-  // Total DBO (nilai kini kewajiban imbalan pasti)
-  const dbo = pvRetirementBenefit + pvPreRetirementBenefits;
+  // Total DBO (nilai kini kewajiban imbalan pasti) — hanya porsi accrued
+  const dbo = pvRetirementDBO + pvPreRetirementDBO;
+
+  // Expected cashflows per tahun (undiscounted) — untuk analisis jatuh tempo PSAK 219
+  const expectedCashflows = [];
+  for (const row of decrementTable) {
+    if (row.age >= retirementAge) break;
+    const yearsFromNow = row.age - currentAge;
+    const serviceAtDecrement = pastService + yearsFromNow;
+    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseRate);
+
+    const amount =
+      row.lx * row.qm * calcDeathBenefit(salaryAtDecrement, serviceAtDecrement) +
+      row.lx * row.qd * calcDisabilityBenefit(salaryAtDecrement, serviceAtDecrement) +
+      row.lx * row.qw * calcResignationBenefit(salaryAtDecrement, serviceAtDecrement);
+
+    expectedCashflows.push({ year: yearsFromNow, amount });
+  }
+  // Cashflow pensiun di akhir periode
+  expectedCashflows.push({
+    year: yearsToRetirement,
+    amount: probSurviveToRetirement * projectedRetirementBenefit,
+  });
 
   // Current Service Cost (CSC) = PV of one additional unit credit
   // = benefit earned this year, discounted back
@@ -197,7 +214,31 @@ export function calcEmployeePUC(employee, assumptions) {
     csc,
     interestCost,
     decrementTable,
+    expectedCashflows,
   };
+}
+
+/**
+ * Analisis jatuh tempo pembayaran imbalan sesuai PSAK 219.
+ * Mengelompokkan expected cashflows (undiscounted) ke 5 tenor bucket.
+ */
+export function calcMaturityAnalysis(employeeResults) {
+  const buckets = [
+    { label: '< 1 tahun',        min: 0,  max: 1,        amount: 0 },
+    { label: '1 ≤ x < 2 tahun',  min: 1,  max: 2,        amount: 0 },
+    { label: '2 ≤ x < 5 tahun',  min: 2,  max: 5,        amount: 0 },
+    { label: '5 ≤ x < 10 tahun', min: 5,  max: 10,       amount: 0 },
+    { label: 'x ≥ 10 tahun',     min: 10, max: Infinity,  amount: 0 },
+  ];
+
+  for (const result of employeeResults) {
+    for (const cf of (result.expectedCashflows ?? [])) {
+      const bucket = buckets.find(b => cf.year >= b.min && cf.year < b.max);
+      if (bucket) bucket.amount += cf.amount;
+    }
+  }
+
+  return buckets.map(({ label, amount }) => ({ label, amount }));
 }
 
 /**
@@ -231,6 +272,7 @@ export function calcPortfolioPUC(employees, assumptions) {
       avgPastService: employees.length > 0
         ? employees.reduce((s, e) => s + e.pastService, 0) / employees.length
         : 0,
+      maturity: calcMaturityAnalysis(results),
     },
   };
 }
@@ -251,26 +293,116 @@ export function calcSensitivity(employees, baseAssumptions, variations) {
 }
 
 /**
- * Hitung rekonsiliasi DBO (pergerakan dari awal ke akhir periode)
- * Requires: DBO awal, pembayaran aktual, asumsi
+ * Rekonsiliasi DBO dari awal ke akhir periode — PSAK 219 Par. 140-141.
+ * actuarialGainLoss adalah selisih antara closingDBO aktual dan yang diharapkan;
+ * nilai positif = kerugian aktuarial (menambah kewajiban).
  */
-export function calcReconciliation(
-  openingDBO,
-  currentCSC,
-  currentInterest,
-  benefitsPaid,
-  closingDBO
-) {
-  const expectedClosing = openingDBO + currentCSC + currentInterest - benefitsPaid;
+export function calcReconciliation({
+  openingDBO = 0,
+  currentCSC = 0,
+  interestCost = 0,
+  pastServiceCost = 0,
+  settlementGainLoss = 0,
+  benefitsPaid = 0,
+  employeeMutation = 0,
+  closingDBO = 0,
+} = {}) {
+  const expectedClosing =
+    openingDBO + currentCSC + interestCost + pastServiceCost +
+    settlementGainLoss - benefitsPaid + employeeMutation;
   const actuarialGainLoss = closingDBO - expectedClosing;
   return {
     openingDBO,
     currentCSC,
-    currentInterest,
+    interestCost,
+    pastServiceCost,
+    settlementGainLoss,
     benefitsPaid,
+    employeeMutation,
     expectedClosing,
     actuarialGainLoss,
     closingDBO,
+  };
+}
+
+/**
+ * Penghasilan Komprehensif Lain (OCI) — PSAK 219 Par. 57(d) & 122.
+ * Keuntungan/kerugian aktuarial TIDAK direklasifikasi ke laba rugi.
+ */
+export function calcOCI({
+  actuarialGainLossOnDBO = 0,
+  actuarialGainLossOnPlanAssets = 0,
+  assetCeilingChange = 0,
+  accumulatedOCIOpening = 0,
+} = {}) {
+  const totalOCI =
+    actuarialGainLossOnDBO + actuarialGainLossOnPlanAssets + assetCeilingChange;
+  const accumulatedOCIClosing = accumulatedOCIOpening + totalOCI;
+  return {
+    actuarialGainLossOnDBO,
+    actuarialGainLossOnPlanAssets,
+    assetCeilingChange,
+    totalOCI,
+    accumulatedOCIOpening,
+    accumulatedOCIClosing,
+  };
+}
+
+/**
+ * Beban yang diakui di Laba Rugi — PSAK 219 Par. 57(c).
+ * Termasuk biaya jasa, biaya bunga, dan ekses pembayaran imbalan.
+ */
+export function calcIncomeStatement({
+  currentServiceCost = 0,
+  pastServiceCost = 0,
+  settlementGainLoss = 0,
+  interestOnDBO = 0,
+  interestOnPlanAssets = 0,
+  interestOnAssetCeiling = 0,
+  excessPayments = 0,
+} = {}) {
+  const totalServiceCost = currentServiceCost + pastServiceCost + settlementGainLoss;
+  const totalInterestCost = interestOnDBO + interestOnPlanAssets + interestOnAssetCeiling;
+  const totalExpense = totalServiceCost + totalInterestCost;
+  const totalExpenseAfterExcess = totalExpense + excessPayments;
+  return {
+    currentServiceCost,
+    pastServiceCost,
+    settlementGainLoss,
+    totalServiceCost,
+    interestOnDBO,
+    interestOnPlanAssets,
+    interestOnAssetCeiling,
+    totalInterestCost,
+    totalExpense,
+    excessPayments,
+    totalExpenseAfterExcess,
+  };
+}
+
+/**
+ * Rekonsiliasi (Aset)/Kewajiban Imbalan Pasti di Neraca — PSAK 219.
+ * Menunjukkan pergerakan nilai bersih kewajiban dari awal ke akhir periode.
+ */
+export function calcBalanceSheetReconciliation({
+  openingNetLiability = 0,
+  expenseRecognized = 0,
+  totalOCI = 0,
+  companyContribution = 0,
+  benefitsPaid = 0,
+  employeeMutation = 0,
+} = {}) {
+  const closingNetLiability =
+    openingNetLiability + expenseRecognized + totalOCI -
+    companyContribution - benefitsPaid + employeeMutation;
+  return {
+    openingNetLiability,
+    expenseRecognized,
+    totalOCI,
+    companyContribution,
+    benefitsPaid,
+    employeeMutation,
+    closingNetLiability,
   };
 }
 
@@ -291,5 +423,6 @@ function createZeroResult(employee) {
     csc: 0,
     interestCost: 0,
     decrementTable: [],
+    expectedCashflows: [],
   };
 }

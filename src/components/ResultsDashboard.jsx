@@ -6,9 +6,26 @@ import {
 
 const CHART_COLORS = ['#d4a853', '#4caf82', '#5b9bd5', '#e05555', '#a78bfa'];
 
-export default function ResultsDashboard({ result }) {
+const PH = ({ children }) => (
+  <span style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 11 }}>
+    {children}
+  </span>
+);
+
+const SectionHeader = ({ label, children }) => (
+  <tr>
+    <td colSpan={3} style={{ textAlign: 'left', fontWeight: 600, paddingTop: 10, paddingBottom: 2, color: 'var(--text1)', borderBottom: '1px solid var(--border)' }}>
+      {label}
+    </td>
+  </tr>
+);
+
+export default function ResultsDashboard({ result, assumptions = {}, company = {} }) {
   if (!result) return null;
-  const { summary, employees } = result;
+  const { summary, employees, sensitivity } = result;
+  const period = company.period || `31 Desember ${new Date().getFullYear()}`;
+  const discountRate = assumptions.discountRate ?? 0;
+  const totalExpense = summary.totalCSC + summary.totalInterestCost;
 
   // DBO by age group
   const ageGroups = {};
@@ -21,7 +38,6 @@ export default function ResultsDashboard({ result }) {
   });
   const ageChartData = Object.values(ageGroups).sort((a, b) => parseInt(a.label) - parseInt(b.label));
 
-  // Top 10 by DBO
   const top10 = [...employees].sort((a, b) => b.dbo - a.dbo).slice(0, 10);
 
   const customTooltip = ({ active, payload, label }) => {
@@ -40,7 +56,7 @@ export default function ResultsDashboard({ result }) {
 
   return (
     <div>
-      {/* KPI tiles */}
+      {/* ── KPI tiles ─────────────────────────────────────────── */}
       <div className="stat-grid">
         <div className="stat-tile accent">
           <div className="label">Total DBO</div>
@@ -59,7 +75,7 @@ export default function ResultsDashboard({ result }) {
         </div>
         <div className="stat-tile green">
           <div className="label">Total Beban Laba Rugi</div>
-          <div className="value" style={{ fontSize: 16 }}>{fmt.rpShort(summary.totalCSC + summary.totalInterestCost)}</div>
+          <div className="value" style={{ fontSize: 16 }}>{fmt.rpShort(totalExpense)}</div>
           <div className="sub">CSC + Biaya Bunga</div>
         </div>
         <div className="stat-tile">
@@ -74,7 +90,7 @@ export default function ResultsDashboard({ result }) {
         </div>
       </div>
 
-      {/* Charts */}
+      {/* ── Charts ────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
         <div className="card">
           <div className="card-title">DBO per Kelompok Usia</div>
@@ -100,7 +116,7 @@ export default function ResultsDashboard({ result }) {
               { label: 'Biaya Jasa Kini (CSC)', value: summary.totalCSC, color: 'var(--accent)' },
               { label: 'Biaya Bunga', value: summary.totalInterestCost, color: 'var(--blue)' },
             ].map(item => {
-              const total = summary.totalCSC + summary.totalInterestCost;
+              const total = totalExpense;
               const pct = total > 0 ? (item.value / total * 100) : 0;
               return (
                 <div key={item.label} style={{ marginBottom: 16 }}>
@@ -120,29 +136,29 @@ export default function ResultsDashboard({ result }) {
         </div>
       </div>
 
-      {/* Laporan Posisi Keuangan */}
+      {/* ── A. Laporan Posisi Keuangan ────────────────────────── */}
       <div className="card">
-        <div className="card-title">Program Imbalan Pasca Kerja — Paragraf 57(a)&amp;(b) PSAK 219</div>
+        <div className="card-title">A. (Aset)/Kewajiban pada Laporan Posisi Keuangan — Par. 57(a)&amp;(b) PSAK 219</div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>Keterangan</th>
-                <th>31 Des {new Date().getFullYear()}</th>
+                <th>{period}</th>
                 <th style={{ textAlign: 'left', paddingLeft: 16, color: 'var(--text3)' }}>Referensi</th>
               </tr>
             </thead>
             <tbody>
               {[
-                { label: 'Nilai Kini Kewajiban Imbalan Pasti', value: summary.totalDBO, ref: '' },
-                { label: 'Nilai Wajar Aset Program', value: 0, ref: '' },
-                { label: 'Defisit / (Surplus)', value: summary.totalDBO, ref: '' },
-                { label: 'Dampak Pembatasan Aset', value: 0, ref: '' },
+                { label: 'Nilai Kini Kewajiban Imbalan Pasti', value: summary.totalDBO },
+                { label: 'Nilai Wajar Aset Program', value: 0 },
+                { label: 'Defisit / (Surplus)', value: summary.totalDBO },
+                { label: 'Dampak Pembatasan Aset', value: 0 },
               ].map((row, i) => (
                 <tr key={i}>
                   <td style={{ textAlign: 'left' }}>{row.label}</td>
                   <td className={row.value > 0 ? 'num-accent' : ''}>{fmt.rp(row.value)}</td>
-                  <td style={{ textAlign: 'left', fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text3)' }}>{row.ref}</td>
+                  <td />
                 </tr>
               ))}
               <tr className="row-total">
@@ -155,39 +171,59 @@ export default function ResultsDashboard({ result }) {
         </div>
       </div>
 
-      {/* Beban Laba Rugi */}
+      {/* ── B. Laporan Laba Rugi ──────────────────────────────── */}
       <div className="card">
-        <div className="card-title">Jumlah Diakui pada Laporan Laba Rugi — Paragraf 57(c) PSAK 219</div>
+        <div className="card-title">B. Jumlah Diakui pada Laporan Laba Rugi — Par. 57(c) PSAK 219</div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>Keterangan</th>
-                <th>Jumlah (Rp)</th>
-                <th style={{ textAlign: 'left', paddingLeft: 16 }}>Keterangan</th>
+                <th>{period}</th>
+                <th style={{ textAlign: 'left', paddingLeft: 16, color: 'var(--text3)' }}>Referensi</th>
               </tr>
             </thead>
             <tbody>
-              <tr><td style={{ textAlign: 'left', fontWeight: 500 }}>Biaya Jasa</td><td></td><td></td></tr>
+              <SectionHeader label="Biaya Jasa" />
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Kini</td>
-                <td>{fmt.rp(summary.totalCSC)}</td>
-                <td style={{ textAlign: 'left', fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text3)' }}>Akrual tahun berjalan</td>
+                <td className="num-accent">{fmt.rp(summary.totalCSC)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Akrual tahun berjalan</td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Lalu</td>
                 <td style={{ color: 'var(--text3)' }}>—</td>
-                <td style={{ textAlign: 'left', fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text3)' }}>Isi dari laporan sebelumnya</td>
+                <td />
               </tr>
-              <tr><td style={{ textAlign: 'left', fontWeight: 500 }}>Biaya Bunga</td><td></td><td></td></tr>
               <tr>
-                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Bunga atas DBO</td>
-                <td>{fmt.rp(summary.totalInterestCost)}</td>
-                <td style={{ textAlign: 'left', fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text3)' }}>DBO × {(summary.discountRateUsed || 0.0677 * 100).toFixed(2)}%</td>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>(Keuntungan)/Kerugian atas Penyelesaian</td>
+                <td style={{ color: 'var(--text3)' }}>—</td>
+                <td />
+              </tr>
+              <SectionHeader label="Biaya Bunga" />
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Bunga atas Kewajiban Imbalan Pasti</td>
+                <td className="num-accent">{fmt.rp(summary.totalInterestCost)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>DBO × {fmt.pct(discountRate)}</td>
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>(Penghasilan)/Biaya Bunga atas Nilai Wajar Aset Program</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Bunga atas Dampak Batas Atas Aset</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Selisih Pembayaran atas Aset Program</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
               </tr>
               <tr className="row-total">
-                <td>Total Beban/(Pendapatan) Diakui</td>
-                <td>{fmt.rp(summary.totalCSC + summary.totalInterestCost)}</td>
+                <td>Beban/(Pendapatan) yang Diakui dalam Laporan Laba Rugi</td>
+                <td>{fmt.rp(totalExpense)}</td>
                 <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 57(c)</td>
               </tr>
             </tbody>
@@ -195,7 +231,268 @@ export default function ResultsDashboard({ result }) {
         </div>
       </div>
 
-      {/* Top 10 table */}
+      {/* ── C. Rekonsiliasi DBO ───────────────────────────────── */}
+      <div className="card">
+        <div className="card-title">C. Rekonsiliasi Nilai Kini Kewajiban Imbalan Pasti — Par. 140-141 PSAK 219</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Keterangan</th>
+                <th>{period}</th>
+                <th style={{ textAlign: 'left', paddingLeft: 16, color: 'var(--text3)' }}>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ textAlign: 'left' }}>DBO Awal Periode</td>
+                <td><PH>→ Isi dari laporan sebelumnya</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Kini</td>
+                <td>{fmt.rp(summary.totalCSC)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Bunga atas DBO</td>
+                <td>{fmt.rp(summary.totalInterestCost)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>DBO × {fmt.pct(discountRate)}</td>
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Lalu &amp; Settlement</td>
+                <td><PH>→ Isi dari data aktual</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Mutasi Pegawai</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Selisih Pembayaran atas Aset Program</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Perubahan Kurs</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Imbalan Kerja yang Dibayarkan</td>
+                <td><PH>→ Isi dari data aktual</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Kombinasi Bisnis</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left' }}>DBO Expected Akhir Periode</td>
+                <td><PH>→ Hitung dari data di atas</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left' }}>(Keuntungan)/Kerugian Aktuarial</td>
+                <td><PH>→ Selisih aktual vs expected</PH></td>
+                <td />
+              </tr>
+              <tr className="row-total">
+                <td>DBO Aktual Akhir Periode</td>
+                <td>{fmt.rp(summary.totalDBO)}</td>
+                <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 140-141</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── D. OCI ────────────────────────────────────────────── */}
+      <div className="card">
+        <div className="card-title">D. Penghasilan Komprehensif Lain — Par. 57(d) &amp; 122 PSAK 219</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Keterangan</th>
+                <th>{period}</th>
+                <th style={{ textAlign: 'left', paddingLeft: 16, color: 'var(--text3)' }}>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ textAlign: 'left' }}>Keuntungan/(Kerugian) Aktuarial atas DBO</td>
+                <td><PH>→ Dari rekonsiliasi DBO</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left' }}>Keuntungan/(Kerugian) Aktuarial atas Aset Program</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left' }}>Dampak Perubahan Batas Atas Aset</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr className="row-total">
+                <td>Total Penghasilan Komprehensif Lain</td>
+                <td><PH>→ Dari rekonsiliasi DBO</PH></td>
+                <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 57(d)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style={{ color: 'var(--text3)', fontSize: 11, fontStyle: 'italic', marginTop: 8, lineHeight: 1.6 }}>
+          Sesuai PSAK 219 paragraf 122, pengukuran kembali atas liabilitas (aset) imbalan pasti neto yang diakui dalam OCI tidak direklasifikasi ke laba rugi pada periode berikutnya.
+        </p>
+      </div>
+
+      {/* ── E. Rekonsiliasi OCI ───────────────────────────────── */}
+      <div className="card">
+        <div className="card-title">E. Rekonsiliasi Penghasilan Komprehensif Lain</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Keterangan</th>
+                <th>{period}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ textAlign: 'left' }}>Akumulasi OCI Awal Periode</td>
+                <td><PH>→ Isi dari laporan sebelumnya</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>OCI Tahun Berjalan</td>
+                <td><PH>→ Dari tabel D</PH></td>
+                <td />
+              </tr>
+              <tr className="row-total">
+                <td>Akumulasi OCI Akhir Periode</td>
+                <td><PH>→ Awal + Tahun berjalan</PH></td>
+                <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 122</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── F. Rekonsiliasi Balance Sheet ─────────────────────── */}
+      <div className="card">
+        <div className="card-title">F. Rekonsiliasi (Aset)/Kewajiban pada Laporan Posisi Keuangan</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Keterangan</th>
+                <th>{period}</th>
+                <th style={{ textAlign: 'left', paddingLeft: 16, color: 'var(--text3)' }}>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ textAlign: 'left' }}>(Aset)/Kewajiban Awal Periode</td>
+                <td><PH>→ Isi dari laporan sebelumnya</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Beban Laba Rugi (CSC + Biaya Bunga)</td>
+                <td>{fmt.rp(totalExpense)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Dari tabel B</td>
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Penghasilan Komprehensif Lain (OCI)</td>
+                <td><PH>→ Dari tabel D</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Iuran Perusahaan</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Imbalan Kerja Dibayarkan</td>
+                <td><PH>→ Isi dari data aktual</PH></td>
+                <td />
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Mutasi Pegawai</td>
+                <td>{fmt.rp(0)}</td>
+                <td />
+              </tr>
+              <tr className="row-total">
+                <td>(Aset)/Kewajiban Akhir Periode</td>
+                <td>{fmt.rp(summary.totalDBO)}</td>
+                <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 57(a)&amp;(b)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── G. Analisis Sensitivitas ──────────────────────────── */}
+      {sensitivity?.length > 0 && (
+        <div className="card">
+          <div className="card-title">G. Analisis Sensitivitas — Par. 145(a) PSAK 219</div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left' }}>Skenario Asumsi</th>
+                  <th>DBO (Rp)</th>
+                  <th>CSC (Rp)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sensitivity.map((row, i) => (
+                  <tr key={i} className={i === 0 ? 'row-total' : ''}>
+                    <td style={{ textAlign: 'left' }}>{row.label}</td>
+                    <td className={i === 0 ? '' : 'num-accent'}>{fmt.rp(row.dbo)}</td>
+                    <td>{fmt.rp(row.csc)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── H. Analisis Jatuh Tempo ───────────────────────────── */}
+      {summary.maturity?.length > 0 && (
+        <div className="card">
+          <div className="card-title">H. Analisis Jatuh Tempo Pembayaran Imbalan — PSAK 219</div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left' }}>Tenor (Tahun)</th>
+                  <th>Jumlah (Rp)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.maturity.map((row, i) => (
+                  <tr key={i}>
+                    <td style={{ textAlign: 'left' }}>{row.label}</td>
+                    <td className="num-accent">{fmt.rp(row.amount)}</td>
+                  </tr>
+                ))}
+                <tr className="row-total">
+                  <td>Total</td>
+                  <td>{fmt.rp(summary.maturity.reduce((s, r) => s + r.amount, 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top 10 ────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-title">10 Karyawan dengan DBO Tertinggi</div>
         <div className="table-wrap">
