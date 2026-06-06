@@ -42,8 +42,9 @@ export const WITHDRAWAL_RATES = {
   ],
 };
 
-export function getWithdrawalRate(age) {
-  const r = WITHDRAWAL_RATES.ranges.find(r => age >= r.min && age <= r.max);
+export function getWithdrawalRate(age, customRates = null) {
+  const ranges = customRates || WITHDRAWAL_RATES.ranges;
+  const r = ranges.find(r => age >= r.min && age <= r.max);
   return r ? r.rate : 0;
 }
 

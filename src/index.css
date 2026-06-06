@@ -144,6 +144,12 @@ tbody tr.row-total td { background: var(--bg4); color: var(--accent); font-weigh
 .alert-success { background: var(--green-bg); border: 1px solid rgba(76,175,130,0.2); color: var(--green); }
 .alert-warn { background: var(--accent-bg); border: 1px solid rgba(212,168,83,0.2); color: var(--accent2); }
 
+/* Mode toggle */
+.mode-toggle { display: flex; gap: 2px; background: var(--bg3); border-radius: var(--radius); padding: 3px; margin-bottom: 16px; }
+.mode-btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 8px 16px; border: none; border-radius: 6px; background: transparent; color: var(--text2); font-size: 13px; font-family: var(--font-body); cursor: pointer; transition: all 0.15s; }
+.mode-btn.active { background: var(--bg1); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+.mode-btn:hover:not(.active) { color: var(--text); }
+
 /* Range slider */
 .slider-group { display: flex; flex-direction: column; gap: 6px; }
 .slider-header { display: flex; justify-content: space-between; align-items: center; }

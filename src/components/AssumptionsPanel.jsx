@@ -6,6 +6,15 @@ export default function AssumptionsPanel({ assumptions, onChange }) {
     if (!isNaN(num)) onChange({ ...assumptions, [key]: num });
   };
 
+  const handleWithdrawalRate = (index, val) => {
+    const num = parseFloat(val);
+    if (isNaN(num)) return;
+    const updated = assumptions.withdrawalRates.map((r, i) =>
+      i === index ? { ...r, rate: num / 100 } : r
+    );
+    onChange({ ...assumptions, withdrawalRates: updated });
+  };
+
   return (
     <div className="card">
       <div className="card-title">Asumsi Aktuaria</div>
@@ -30,15 +39,28 @@ export default function AssumptionsPanel({ assumptions, onChange }) {
         </div>
 
         <div className="form-group">
-          <label className="form-label">Tingkat Kenaikan Upah (% per tahun)</label>
+          <label className="form-label">Kenaikan Upah Tahun Pertama (% per tahun)</label>
           <input
             type="number" step="0.01" min="0" max="30"
             className="form-input"
-            value={(assumptions.salaryIncreaseRate * 100).toFixed(2)}
-            onChange={e => handle('salaryIncreaseRate', e.target.value / 100)}
+            value={(assumptions.salaryIncreaseYear1 * 100).toFixed(2)}
+            onChange={e => handle('salaryIncreaseYear1', e.target.value / 100)}
           />
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>
-            Jangka panjang. Laporan BMD: 4,00%.
+            Tahun pertama bisa berbeda dari jangka panjang. PDF laporan BMD: 4% tahun 1, 6% tahun 2+.
+          </span>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Kenaikan Upah Jangka Panjang (% per tahun)</label>
+          <input
+            type="number" step="0.01" min="0" max="30"
+            className="form-input"
+            value={(assumptions.salaryIncreaseLongTerm * 100).toFixed(2)}
+            onChange={e => handle('salaryIncreaseLongTerm', e.target.value / 100)}
+          />
+          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+            Rate untuk tahun ke-2 dan seterusnya hingga pensiun.
           </span>
         </div>
 
@@ -74,22 +96,30 @@ export default function AssumptionsPanel({ assumptions, onChange }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        {[
-          { label: 'Usia 15–29', key: 'w1529', value: '6,00%' },
-          { label: 'Usia 30–34', key: 'w3034', value: '3,00%' },
-          { label: 'Usia 35–39', key: 'w3539', value: '1,80%' },
-          { label: 'Usia 40–53', key: 'w4053', value: '1,20%' },
-          { label: 'Usia 54–55', key: 'w5455', value: '0,60%' },
-          { label: 'Usia > 56', key: 'w56', value: '0,00%' },
-        ].map(item => (
-          <div key={item.key} style={{ background: 'var(--bg3)', borderRadius: 6, padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: 'var(--text2)' }}>{item.label}</span>
-            <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{item.value}</span>
+        {(assumptions.withdrawalRates || []).map((item, index) => (
+          <div key={index} style={{ background: 'var(--bg3)', borderRadius: 6, padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>
+              Usia {item.min}–{item.max === 99 ? '>' + (item.min - 1) : item.max}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="number" step="0.01" min="0" max="20"
+                style={{
+                  width: 64, textAlign: 'right', padding: '3px 6px',
+                  background: 'var(--bg2)', border: '1px solid var(--border2)',
+                  borderRadius: 4, color: 'var(--accent)',
+                  fontFamily: 'var(--font-mono)', fontSize: 13,
+                }}
+                value={(item.rate * 100).toFixed(2)}
+                onChange={e => handleWithdrawalRate(index, e.target.value)}
+              />
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>%</span>
+            </div>
           </div>
         ))}
       </div>
       <p style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
-        Tingkat pengunduran diri mengacu TMI IV 2019 (fixed per laporan aktuaria). Tabel mortalita: TMI IV 2019, hard-coded.
+        Tingkat pengunduran diri dapat disesuaikan per kelompok usia. Tabel mortalita: TMI IV 2019, hard-coded.
       </p>
     </div>
   );

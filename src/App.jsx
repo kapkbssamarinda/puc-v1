@@ -7,18 +7,42 @@ import {
 
 import EmployeeInput from './components/EmployeeInput.jsx';
 import AssumptionsPanel from './components/AssumptionsPanel.jsx';
+import PriorPeriodInput from './components/PriorPeriodInput.jsx';
 import ResultsDashboard from './components/ResultsDashboard.jsx';
 import SensitivityAnalysis from './components/SensitivityAnalysis.jsx';
 
-import { calcPortfolioPUC, calcSensitivity } from './engine/puc.js';
+import {
+  calcPortfolioPUC, calcSensitivity,
+  calcReconciliation, calcOCI, calcIncomeStatement, calcBalanceSheetReconciliation,
+} from './engine/puc.js';
+import { generateEmployeesFromSummary } from './engine/summaryGenerator.js';
 import { exportToExcel } from './engine/excelExport.js';
 import { fmt } from './utils/format.js';
 
 const DEFAULT_ASSUMPTIONS = {
   discountRate: 0.0677,
-  salaryIncreaseRate: 0.04,
+  salaryIncreaseYear1: 0.04,
+  salaryIncreaseLongTerm: 0.04,
   retirementAge: 58,
   disabilityFactor: 0.10,
+  withdrawalRates: [
+    { min: 15, max: 29, rate: 0.060 },
+    { min: 30, max: 34, rate: 0.030 },
+    { min: 35, max: 39, rate: 0.018 },
+    { min: 40, max: 53, rate: 0.012 },
+    { min: 54, max: 55, rate: 0.006 },
+    { min: 56, max: 99, rate: 0.000 },
+  ],
+};
+
+const DEFAULT_PRIOR_PERIOD = {
+  openingDBO: 0,
+  openingDiscountRate: 0.0677,
+  pastServiceCost: 0,
+  settlementGainLoss: 0,
+  benefitsPaid: 0,
+  employeeMutation: 0,
+  accumulatedOCIOpening: 0,
 };
 
 const DEFAULT_COMPANY = {
@@ -42,10 +66,19 @@ export default function App() {
   const [page, setPage] = useState('data');
   const [employees, setEmployees] = useState([]);
   const [assumptions, setAssumptions] = useState(DEFAULT_ASSUMPTIONS);
+  const [priorPeriod, setPriorPeriod] = useState(DEFAULT_PRIOR_PERIOD);
   const [company, setCompany] = useState(DEFAULT_COMPANY);
   const [result, setResult] = useState(null);
   const [calculating, setCalculating] = useState(false);
   const [calcError, setCalcError] = useState(null);
+  const [inputMode, setInputMode] = useState('individual');
+  const [summaryInput, setSummaryInput] = useState({
+    totalEmployees: 0,
+    totalWagePerMonth: 0,
+    avgAge: 0,
+    avgPastService: 0,
+    genderRatioMale: 50,
+  });
 
   const runCalculation = useCallback(() => {
     if (employees.length === 0) {
@@ -56,15 +89,53 @@ export default function App() {
     setCalcError(null);
     setTimeout(() => {
       try {
-        const portfolio = calcPortfolioPUC(employees, assumptions);
+        const portfolio = calcPortfolioPUC(employees, assumptions, priorPeriod);
         const sensitivity = calcSensitivity(employees, assumptions, [
           { label: 'Asumsi Dasar', assumptions: {} },
           { label: `Diskonto +1%`, assumptions: { discountRate: assumptions.discountRate + 0.01 } },
           { label: `Diskonto -1%`, assumptions: { discountRate: Math.max(0.001, assumptions.discountRate - 0.01) } },
-          { label: `Kenaikan Upah +1%`, assumptions: { salaryIncreaseRate: assumptions.salaryIncreaseRate + 0.01 } },
-          { label: `Kenaikan Upah -1%`, assumptions: { salaryIncreaseRate: Math.max(0, assumptions.salaryIncreaseRate - 0.01) } },
+          { label: `Kenaikan Upah +1%`, assumptions: { salaryIncreaseYear1: assumptions.salaryIncreaseYear1 + 0.01, salaryIncreaseLongTerm: assumptions.salaryIncreaseLongTerm + 0.01 } },
+          { label: `Kenaikan Upah -1%`, assumptions: { salaryIncreaseYear1: Math.max(0, assumptions.salaryIncreaseYear1 - 0.01), salaryIncreaseLongTerm: Math.max(0, assumptions.salaryIncreaseLongTerm - 0.01) } },
         ]);
-        setResult({ ...portfolio, sensitivity });
+
+        const reconciliationDBO = calcReconciliation({
+          openingDBO: priorPeriod.openingDBO,
+          currentCSC: portfolio.summary.totalCSC,
+          interestCost: portfolio.summary.totalInterestCost,
+          pastServiceCost: priorPeriod.pastServiceCost,
+          settlementGainLoss: priorPeriod.settlementGainLoss,
+          benefitsPaid: priorPeriod.benefitsPaid,
+          employeeMutation: priorPeriod.employeeMutation,
+          closingDBO: portfolio.summary.totalDBO,
+        });
+
+        const incomeStatement = calcIncomeStatement({
+          currentServiceCost: portfolio.summary.totalCSC,
+          pastServiceCost: priorPeriod.pastServiceCost,
+          settlementGainLoss: priorPeriod.settlementGainLoss,
+          interestOnDBO: portfolio.summary.totalInterestCost,
+          interestOnPlanAssets: 0,
+          interestOnAssetCeiling: 0,
+          excessPayments: 0,
+        });
+
+        const oci = calcOCI({
+          actuarialGainLossOnDBO: reconciliationDBO.actuarialGainLoss,
+          actuarialGainLossOnPlanAssets: 0,
+          assetCeilingChange: 0,
+          accumulatedOCIOpening: priorPeriod.accumulatedOCIOpening,
+        });
+
+        const balanceSheet = calcBalanceSheetReconciliation({
+          openingNetLiability: priorPeriod.openingDBO,
+          expenseRecognized: incomeStatement.totalExpenseAfterExcess,
+          totalOCI: oci.totalOCI,
+          companyContribution: 0,
+          benefitsPaid: priorPeriod.benefitsPaid,
+          employeeMutation: priorPeriod.employeeMutation,
+        });
+
+        setResult({ ...portfolio, sensitivity, reconciliationDBO, incomeStatement, oci, balanceSheet, priorPeriod });
         setPage('results');
       } catch (err) {
         setCalcError('Terjadi kesalahan: ' + err.message);
@@ -72,7 +143,7 @@ export default function App() {
         setCalculating(false);
       }
     }, 50);
-  }, [employees, assumptions]);
+  }, [employees, assumptions, priorPeriod]);
 
   const handleExcelExport = async () => {
     if (!result) return;
@@ -101,6 +172,16 @@ export default function App() {
 
     y = 50;
     const s = result.summary;
+    const isEstimated = result.employees?.length > 0 && result.employees.every(e => e.isGenerated);
+    if (isEstimated) {
+      doc.setFillColor(50, 40, 20);
+      doc.rect(13, y - 4, pageW - 26, 10, 'F');
+      doc.setTextColor(212, 168, 83);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PERHATIAN: Hasil ini menggunakan data estimasi rata-rata — deviasi ±15-25% dari data individu dimungkinkan.', pageW / 2, y + 1, { align: 'center' });
+      y += 14;
+    }
 
     const printSection = (title) => {
       doc.setTextColor(212, 168, 83);
@@ -140,20 +221,46 @@ export default function App() {
     y += 3;
 
     printSection('LAPORAN LABA RUGI — PAR. 57(C) PSAK 219');
-    printRow('Biaya Jasa Kini (Current Service Cost)', fmt.rp(s.totalCSC));
-    printRow('Biaya Bunga atas DBO', fmt.rp(s.totalInterestCost));
-    printRow('Total Beban/(Pendapatan)', fmt.rp(s.totalCSC + s.totalInterestCost), true);
+    printRow('Biaya Jasa Kini (Current Service Cost)', fmt.rp(result.incomeStatement?.currentServiceCost ?? s.totalCSC));
+    printRow('Biaya Jasa Lalu', fmt.rp(result.incomeStatement?.pastServiceCost ?? 0));
+    printRow('(Keuntungan)/Kerugian Penyelesaian', fmt.rp(result.incomeStatement?.settlementGainLoss ?? 0));
+    printRow('Biaya Bunga atas DBO', fmt.rp(result.incomeStatement?.interestOnDBO ?? s.totalInterestCost));
+    printRow('Total Beban/(Pendapatan)', fmt.rp(result.incomeStatement?.totalExpenseAfterExcess ?? (s.totalCSC + s.totalInterestCost)), true);
     y += 3;
 
     printSection('ASUMSI AKTUARIA');
     printRow('Metode', 'Projected Unit Credit');
     printRow('Tingkat Diskonto', fmt.pct(assumptions.discountRate));
-    printRow('Tingkat Kenaikan Upah', fmt.pct(assumptions.salaryIncreaseRate));
+    printRow('Kenaikan Upah Tahun Pertama', fmt.pct(assumptions.salaryIncreaseYear1));
+    printRow('Kenaikan Upah Jangka Panjang', fmt.pct(assumptions.salaryIncreaseLongTerm));
     printRow('Usia Pensiun Normal', assumptions.retirementAge + ' tahun');
     printRow('Tabel Mortalita', 'TMI IV 2019');
     printRow('Rata-rata Usia', fmt.num(s.avgAge, 2) + ' tahun');
     printRow('Rata-rata Masa Kerja', fmt.num(s.avgPastService, 2) + ' tahun');
     printRow('Durasi Rata-rata Tertimbang', fmt.num(s.weightedAverageDuration, 2) + ' tahun');
+
+    // Rekonsiliasi DBO (hanya jika ada data periode lalu)
+    const rd = result.reconciliationDBO;
+    if (rd && result.priorPeriod?.openingDBO > 0) {
+      if (y > pageH - 80) { doc.addPage(); y = 20; }
+      y += 3;
+      printSection('REKONSILIASI DBO — PAR. 140-141 PSAK 219');
+      printRow('DBO Awal Periode', fmt.rp(rd.openingDBO));
+      printRow('(+) Biaya Jasa Kini', fmt.rp(rd.currentCSC));
+      printRow('(+) Biaya Bunga', fmt.rp(rd.interestCost));
+      if (rd.pastServiceCost !== 0 || rd.settlementGainLoss !== 0) {
+        printRow('(+/-) Jasa Lalu & Settlement', fmt.rp(rd.pastServiceCost + rd.settlementGainLoss));
+      }
+      if (rd.benefitsPaid !== 0) {
+        printRow('(-) Imbalan Dibayarkan', fmt.rp(-rd.benefitsPaid));
+      }
+      if (rd.employeeMutation !== 0) {
+        printRow('(+/-) Mutasi Pegawai', fmt.rp(rd.employeeMutation));
+      }
+      printRow('DBO Expected Akhir', fmt.rp(rd.expectedClosing));
+      printRow('(+/-) (Keuntungan)/Kerugian Aktuarial', fmt.rp(rd.actuarialGainLoss));
+      printRow('DBO Aktual Akhir Periode', fmt.rp(rd.closingDBO), true);
+    }
 
     // Footer
     doc.setFillColor(26, 26, 24);
@@ -166,11 +273,19 @@ export default function App() {
     doc.save(`Laporan_Aktuaria_${(company.name || 'Perusahaan').replace(/\s+/g, '_')}_${new Date().getFullYear()}.pdf`);
   };
 
+  const handleGenerateSummary = useCallback(() => {
+    const generated = generateEmployeesFromSummary(summaryInput);
+    if (generated.length === 0) return;
+    setEmployees(generated);
+    setInputMode('individual');
+  }, [summaryInput]);
+
   const loadSample = () => { setEmployees(SAMPLE_EMPLOYEES); setPage('data'); };
 
   const nav = [
     { id: 'data', label: 'Data Karyawan', icon: Users },
     { id: 'assumptions', label: 'Asumsi Aktuaria', icon: Settings },
+    { id: 'prior', label: 'Data Periode Lalu', icon: FileText },
     { id: 'results', label: 'Hasil Perhitungan', icon: BarChart2, req: true },
     { id: 'sensitivity', label: 'Analisis Sensitivitas', icon: TrendingUp, req: true },
   ];
@@ -248,7 +363,15 @@ export default function App() {
                 <h2>Data Karyawan</h2>
                 <p>Upload Excel atau tambahkan manual. Kolom wajib: usia, masa kerja lalu, gaji per bulan.</p>
               </div>
-              <EmployeeInput employees={employees} onChange={setEmployees} />
+              <EmployeeInput
+                employees={employees}
+                onChange={setEmployees}
+                inputMode={inputMode}
+                setInputMode={setInputMode}
+                summaryInput={summaryInput}
+                setSummaryInput={setSummaryInput}
+                onGenerateSummary={handleGenerateSummary}
+              />
               {calcError && (
                 <div className="alert" style={{ background: 'var(--red-bg)', border: '1px solid rgba(224,85,85,0.2)', color: 'var(--red)' }}>
                   <AlertCircle size={14} /><span>{calcError}</span>
@@ -287,6 +410,26 @@ export default function App() {
             </>
           )}
 
+          {page === 'prior' && (
+            <>
+              <div className="page-header">
+                <h2>Data Periode Sebelumnya</h2>
+                <p>Isi data dari laporan aktuaria periode lalu untuk rekonsiliasi DBO dan Interest Cost yang akurat.</p>
+              </div>
+              <PriorPeriodInput priorPeriod={priorPeriod} onChange={setPriorPeriod} />
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <button className="btn btn-primary" onClick={() => setPage('assumptions')}>
+                  <ChevronRight size={14} />Lanjut ke Asumsi
+                </button>
+                {employees.length > 0 && (
+                  <button className="btn btn-secondary" onClick={runCalculation} disabled={calculating}>
+                    <Play size={14} />Hitung ({employees.length} karyawan)
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+
           {page === 'results' && (
             <>
               <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -299,7 +442,7 @@ export default function App() {
                   <button className="btn btn-secondary btn-sm" onClick={handlePDFExport}><FileText size={12} />PDF</button>
                 </div>
               </div>
-              <ResultsDashboard result={result} assumptions={assumptions} company={company} />
+              <ResultsDashboard result={result} assumptions={assumptions} company={company} priorPeriod={priorPeriod} />
             </>
           )}
 

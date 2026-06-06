@@ -34,9 +34,10 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   wb.creator = 'PUC Actuarial Tool — PSAK 219';
   wb.created = new Date();
 
-  const { employees, summary } = calcResult;
+  const { employees, summary, reconciliationDBO, incomeStatement, oci, balanceSheet } = calcResult;
+  const isEstimated = employees?.length > 0 && employees.every(e => e.isGenerated);
   const period = companyInfo.period || `31 Desember ${new Date().getFullYear()}`;
-  const totalExpense = rp(summary.totalCSC + summary.totalInterestCost);
+  const totalExpense = rp(incomeStatement?.totalExpenseAfterExcess ?? (summary.totalCSC + summary.totalInterestCost));
 
   // ============================================================
   // SHEET 1: RINGKASAN EKSEKUTIF
@@ -59,6 +60,16 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   ws1.getCell('A2').font = { name: 'Calibri', size: 10, color: { argb: 'FF' + COLORS.subHeaderText } };
   ws1.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + COLORS.subHeader } };
   ws1.getCell('A2').alignment = { horizontal: 'center' };
+
+  if (isEstimated) {
+    ws1.mergeCells('A3:D3');
+    ws1.getCell('A3').value = '⚠ PERHATIAN: Laporan ini menggunakan data estimasi rata-rata — deviasi ±15–25% dari data individu dimungkinkan. Tidak untuk laporan resmi.';
+    ws1.getCell('A3').font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FF' + COLORS.accent } };
+    ws1.getCell('A3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF322814' } };
+    ws1.getCell('A3').alignment = { horizontal: 'center', wrapText: true };
+    ws1.getRow(3).height = 24;
+  }
+
   ws1.addRow([]);
 
   addSectionHeader(ws1, 'A4:D4', 'INFORMASI PERUSAHAAN');
@@ -105,9 +116,9 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
 
   addTableGroupHeader(ws1, 26, 'Biaya Jasa');
   [
-    { label: '     Biaya Jasa Kini (Current Service Cost)', value: rp(summary.totalCSC), ref: 'Par. 57(c)', isPlaceholder: false },
-    { label: '     Biaya Jasa Lalu (Past Service Cost)', value: null, ref: 'Par. 57(c)', isPlaceholder: true },
-    { label: '     (Keuntungan)/Kerugian atas Penyelesaian', value: null, ref: 'Par. 57(c)', isPlaceholder: true },
+    { label: '     Biaya Jasa Kini (Current Service Cost)', value: rp(incomeStatement?.currentServiceCost ?? summary.totalCSC), ref: 'Par. 57(c)', isPlaceholder: false },
+    { label: '     Biaya Jasa Lalu (Past Service Cost)',    value: rp(incomeStatement?.pastServiceCost ?? 0),                  ref: 'Par. 57(c)', isPlaceholder: false },
+    { label: '     (Keuntungan)/Kerugian atas Penyelesaian', value: rp(incomeStatement?.settlementGainLoss ?? 0),              ref: 'Par. 57(c)', isPlaceholder: false },
   ].forEach((d, i) => addBebanRow(ws1.getRow(27 + i), d.label, d.value, d.ref, d.isPlaceholder));
 
   addTableGroupHeader(ws1, 30, 'Biaya Bunga');
@@ -119,7 +130,7 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   ].forEach((d, i) => addBebanRow(ws1.getRow(31 + i), d.label, d.value, d.ref, d.isPlaceholder));
 
   const totalBebanRow = ws1.getRow(35);
-  totalBebanRow.values = ['Beban/(Pendapatan) yang Diakui dalam Laporan Laba Rugi', totalExpense, '', 'Par. 57(c)'];
+  totalBebanRow.values = ['Beban/(Pendapatan) yang Diakui dalam Laporan Laba Rugi', rp(incomeStatement?.totalExpenseAfterExcess ?? totalExpense), '', 'Par. 57(c)'];
   totalBebanRow.getCell(2).numFmt = '#,##0';
   totalBebanRow.eachCell((cell, col) => {
     cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF' + COLORS.accent } };
@@ -143,16 +154,15 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   [
     ['Metode Penilaian Aktuaria', 'Projected Unit Credit', '', 'PSAK 219'],
     ['Tingkat Diskonto', pct(assumptions.discountRate), '', 'Yield Curve IGSYC Zero Coupon'],
-    ['Tingkat Kenaikan Upah Jangka Panjang', pct(assumptions.salaryIncreaseRate), '', 'Sesuai PSAK 219 Par. 83'],
+    ['Kenaikan Upah Tahun Pertama', pct(assumptions.salaryIncreaseYear1), '', 'Sesuai PSAK 219 Par. 83'],
+    ['Kenaikan Upah Jangka Panjang', pct(assumptions.salaryIncreaseLongTerm), '', 'Sesuai PSAK 219 Par. 83'],
     ['Tabel Mortalita', 'TMI IV 2019', '', 'Tabel Mortalita Indonesia IV 2019'],
     ['Tingkat Cacat', pct(assumptions.disabilityFactor) + ' dari TMI IV 2019', '', 'Probabilitas cacat relatif'],
     ['Usia Pensiun Normal', assumptions.retirementAge + ' tahun', '', 'PP 35/2021'],
-    ['Tingkat Pengunduran Diri 15–29 th', '6,00%', '', 'Per tahun'],
-    ['Tingkat Pengunduran Diri 30–34 th', '3,00%', '', 'Per tahun'],
-    ['Tingkat Pengunduran Diri 35–39 th', '1,80%', '', 'Per tahun'],
-    ['Tingkat Pengunduran Diri 40–53 th', '1,20%', '', 'Per tahun'],
-    ['Tingkat Pengunduran Diri 54–55 th', '0,60%', '', 'Per tahun'],
-    ['Tingkat Pengunduran Diri > 56 th', '0,00%', '', 'Per tahun'],
+    ...((assumptions.withdrawalRates || []).map(wr => {
+      const rangeLabel = wr.max >= 99 ? `> ${wr.min - 1} th` : `${wr.min}–${wr.max} th`;
+      return [`Tingkat Pengunduran Diri ${rangeLabel}`, pct(wr.rate), '', 'Per tahun'];
+    })),
     ['Tingkat Pengembalian Aset Program', '0,00%', '', 'Tidak ada aset program'],
   ].forEach((d, i) => {
     const row = ws2.getRow(6 + i);
@@ -242,20 +252,20 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   styleHeaderRow(ws4.getRow(r)); r++;
 
   [
-    { label: 'DBO Awal Periode',                                        value: null, ph: '→ Isi dari laporan sebelumnya', ref: '' },
-    { label: '     (+) Biaya Jasa Kini',                                value: rp(summary.totalCSC),          ph: null, ref: 'Par. 57(c)' },
-    { label: '     (+) Biaya Bunga atas DBO',                           value: rp(summary.totalInterestCost), ph: null, ref: 'Par. 57(c)' },
-    { label: '     (+/-) Biaya Jasa Lalu & Settlement',                 value: null, ph: '→ Isi dari data aktual', ref: 'Par. 57(c)' },
-    { label: '     (+/-) Dampak Mutasi Pegawai',                        value: 0,    ph: null, ref: '' },
-    { label: '     (-) Selisih Pembayaran atas Aset Program',           value: 0,    ph: null, ref: '' },
-    { label: '     (+/-) Dampak Perubahan Kurs',                        value: 0,    ph: null, ref: '' },
-    { label: '     (-) Imbalan Kerja yang Dibayarkan',                  value: null, ph: '→ Isi dari data aktual', ref: '' },
-    { label: '     (+/-) Dampak Kombinasi Bisnis',                      value: 0,    ph: null, ref: '' },
-    { label: 'DBO Expected Akhir Periode',                              value: null, ph: '→ Hitung dari data di atas', ref: '' },
-    { label: '     (+/-) (Keuntungan)/Kerugian Aktuarial',              value: null, ph: '→ Selisih aktual vs expected', ref: 'OCI – Par. 57(d)' },
-  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, d.ph, d.ref); r++; });
+    { label: 'DBO Awal Periode',                                value: rp(reconciliationDBO?.openingDBO ?? 0),                                                                ref: '' },
+    { label: '     (+) Biaya Jasa Kini',                        value: rp(reconciliationDBO?.currentCSC ?? summary.totalCSC),                                                ref: 'Par. 57(c)' },
+    { label: '     (+) Biaya Bunga atas DBO',                   value: rp(reconciliationDBO?.interestCost ?? summary.totalInterestCost),                                     ref: 'Par. 57(c)' },
+    { label: '     (+/-) Biaya Jasa Lalu & Settlement',         value: rp((reconciliationDBO?.pastServiceCost ?? 0) + (reconciliationDBO?.settlementGainLoss ?? 0)),          ref: 'Par. 57(c)' },
+    { label: '     (+/-) Dampak Mutasi Pegawai',                value: rp(reconciliationDBO?.employeeMutation ?? 0),                                                         ref: '' },
+    { label: '     (-) Selisih Pembayaran atas Aset Program',   value: 0,                                                                                                    ref: '' },
+    { label: '     (+/-) Dampak Perubahan Kurs',                value: 0,                                                                                                    ref: '' },
+    { label: '     (-) Imbalan Kerja yang Dibayarkan',          value: rp(-(reconciliationDBO?.benefitsPaid ?? 0)),                                                           ref: '' },
+    { label: '     (+/-) Dampak Kombinasi Bisnis',              value: 0,                                                                                                    ref: '' },
+    { label: 'DBO Expected Akhir Periode',                      value: rp(reconciliationDBO?.expectedClosing ?? summary.totalDBO),                                           ref: '' },
+    { label: '     (+/-) (Keuntungan)/Kerugian Aktuarial',      value: rp(reconciliationDBO?.actuarialGainLoss ?? 0),                                                        ref: 'OCI – Par. 57(d)' },
+  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, null, d.ref); r++; });
 
-  addRekonTotal(ws4.getRow(r), 'DBO Aktual Akhir Periode', rp(summary.totalDBO), 'Par. 140-141'); r++;
+  addRekonTotal(ws4.getRow(r), 'DBO Aktual Akhir Periode', rp(reconciliationDBO?.closingDBO ?? summary.totalDBO), 'Par. 140-141'); r++;
   r++; // blank row
 
   // ── B. Rekonsiliasi (Aset)/Kewajiban ────────────────────────
@@ -264,15 +274,15 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   styleHeaderRow(ws4.getRow(r)); r++;
 
   [
-    { label: '(Aset)/Kewajiban Awal Periode',                   value: null, ph: '→ Isi dari laporan sebelumnya', ref: '' },
-    { label: '     (+) Beban Laba Rugi (CSC + Biaya Bunga)',    value: totalExpense,                              ref: 'Dari tabel B' },
-    { label: '     (+/-) Penghasilan Komprehensif Lain (OCI)',  value: null, ph: '→ Dari tabel OCI',              ref: 'Par. 57(d)' },
-    { label: '     (-) Iuran Perusahaan',                       value: 0,                                         ref: '' },
-    { label: '     (-) Imbalan Kerja Dibayarkan',               value: null, ph: '→ Isi dari data aktual',        ref: '' },
-    { label: '     (+/-) Dampak Mutasi Pegawai',                value: 0,                                         ref: '' },
-  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value ?? null, d.ph, d.ref); r++; });
+    { label: '(Aset)/Kewajiban Awal Periode',                  value: rp(balanceSheet?.openingNetLiability ?? 0),                       ref: '' },
+    { label: '     (+) Beban Laba Rugi (CSC + Biaya Bunga)',   value: rp(balanceSheet?.expenseRecognized ?? totalExpense),               ref: 'Dari tabel B' },
+    { label: '     (+/-) Penghasilan Komprehensif Lain (OCI)', value: rp(balanceSheet?.totalOCI ?? 0),                                   ref: 'Par. 57(d)' },
+    { label: '     (-) Iuran Perusahaan',                      value: 0,                                                                 ref: '' },
+    { label: '     (-) Imbalan Kerja Dibayarkan',              value: rp(-(balanceSheet?.benefitsPaid ?? 0)),                            ref: '' },
+    { label: '     (+/-) Dampak Mutasi Pegawai',               value: rp(balanceSheet?.employeeMutation ?? 0),                           ref: '' },
+  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, null, d.ref); r++; });
 
-  addRekonTotal(ws4.getRow(r), '(Aset)/Kewajiban Akhir Periode', rp(summary.totalDBO), 'Par. 57(a)&(b)'); r++;
+  addRekonTotal(ws4.getRow(r), '(Aset)/Kewajiban Akhir Periode', rp(balanceSheet?.closingNetLiability ?? summary.totalDBO), 'Par. 57(a)&(b)'); r++;
   r++; // blank row
 
   // ── C. Penghasilan Komprehensif Lain ────────────────────────
@@ -281,12 +291,12 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   styleHeaderRow(ws4.getRow(r)); r++;
 
   [
-    { label: 'Keuntungan/(Kerugian) Aktuarial atas DBO',         value: null, ph: '→ Dari rekonsiliasi DBO', ref: '' },
-    { label: 'Keuntungan/(Kerugian) Aktuarial atas Aset Program',value: 0,    ph: null, ref: '' },
-    { label: 'Dampak Perubahan Batas Atas Aset',                 value: 0,    ph: null, ref: '' },
-  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, d.ph, d.ref); r++; });
+    { label: 'Keuntungan/(Kerugian) Aktuarial atas DBO',          value: rp(oci?.actuarialGainLossOnDBO ?? 0), ref: '' },
+    { label: 'Keuntungan/(Kerugian) Aktuarial atas Aset Program', value: 0,                                   ref: '' },
+    { label: 'Dampak Perubahan Batas Atas Aset',                  value: 0,                                   ref: '' },
+  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, null, d.ref); r++; });
 
-  addRekonTotal(ws4.getRow(r), 'Total Penghasilan Komprehensif Lain', null, 'Par. 57(d)', '→ Dari rekonsiliasi DBO'); r++;
+  addRekonTotal(ws4.getRow(r), 'Total Penghasilan Komprehensif Lain', rp(oci?.totalOCI ?? 0), 'Par. 57(d)'); r++;
 
   // Catatan kaki
   ws4.mergeCells(`A${r}:D${r}`);
@@ -301,11 +311,11 @@ export async function exportToExcel(calcResult, assumptions, companyInfo) {
   styleHeaderRow(ws4.getRow(r)); r++;
 
   [
-    { label: 'Akumulasi OCI Awal Periode', value: null, ph: '→ Isi dari laporan sebelumnya', ref: '' },
-    { label: '     OCI Tahun Berjalan',    value: null, ph: '→ Dari tabel C',                ref: 'Par. 122' },
-  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, d.ph, d.ref); r++; });
+    { label: 'Akumulasi OCI Awal Periode', value: rp(oci?.accumulatedOCIOpening ?? 0), ref: '' },
+    { label: '     OCI Tahun Berjalan',    value: rp(oci?.totalOCI ?? 0),               ref: 'Par. 122' },
+  ].forEach(d => { addRekonRow(ws4.getRow(r), d.label, d.value, null, d.ref); r++; });
 
-  addRekonTotal(ws4.getRow(r), 'Akumulasi OCI Akhir Periode', null, 'Par. 122', '→ Awal + Tahun berjalan');
+  addRekonTotal(ws4.getRow(r), 'Akumulasi OCI Akhir Periode', rp(oci?.accumulatedOCIClosing ?? 0), 'Par. 122');
 
   // ============================================================
   // SHEET 5: ANALISIS SENSITIVITAS + ANALISIS JATUH TEMPO

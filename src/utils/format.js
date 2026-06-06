@@ -1,3 +1,11 @@
+// Force bracket notation for a value that is stored positive but displayed as a deduction.
+// rpBracket(x) for x > 0 → "Rp x", for x < 0 → "(Rp |x|)"
+export function rpBracket(value) {
+  if (value === null || value === undefined || isNaN(value)) return '—';
+  if (value < 0) return `(${fmt.rp(Math.abs(value))})`;
+  return fmt.rp(value);
+}
+
 export const fmt = {
   rp: (v) => {
     if (v === null || v === undefined || isNaN(v)) return '—';

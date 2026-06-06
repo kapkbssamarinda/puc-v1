@@ -14,22 +14,24 @@ import {
 /**
  * Proyeksikan gaji ke masa depan
  */
-function projectSalary(currentSalary, yearsAhead, salaryIncreaseRate) {
-  return currentSalary * Math.pow(1 + salaryIncreaseRate, yearsAhead);
+function projectSalary(currentSalary, yearsAhead, salaryIncreaseYear1, salaryIncreaseLongTerm) {
+  if (yearsAhead <= 0) return currentSalary;
+  if (yearsAhead <= 1) return currentSalary * (1 + salaryIncreaseYear1);
+  return currentSalary * (1 + salaryIncreaseYear1) * Math.pow(1 + salaryIncreaseLongTerm, yearsAhead - 1);
 }
 
 /**
  * Hitung faktor dekremen aktif (probabilitas karyawan masih aktif)
  * Mempertimbangkan: mortalita + cacat + pengunduran diri
  */
-function buildDecrementTable(currentAge, retirementAge, disabilityFactor = 0.1) {
+function buildDecrementTable(currentAge, retirementAge, disabilityFactor = 0.1, withdrawalRates = null) {
   const table = [];
   let lx = 1.0; // probability of being active at start
 
   for (let age = currentAge; age < retirementAge; age++) {
-    const qm = getMortalityRate(age);      // mortalita
-    const qd = getDisabilityRate(age, disabilityFactor); // cacat
-    const qw = getWithdrawalRate(age);     // pengunduran diri
+    const qm = getMortalityRate(age);                        // mortalita
+    const qd = getDisabilityRate(age, disabilityFactor);     // cacat
+    const qw = getWithdrawalRate(age, withdrawalRates);      // pengunduran diri
 
     // Total decrement (approximate - independent decrements)
     const totalDecrement = qm + qd + qw;
@@ -65,9 +67,11 @@ function buildDecrementTable(currentAge, retirementAge, disabilityFactor = 0.1) 
 export function calcEmployeePUC(employee, assumptions) {
   const {
     discountRate,
-    salaryIncreaseRate,
+    salaryIncreaseYear1,
+    salaryIncreaseLongTerm,
     retirementAge,
     disabilityFactor,
+    withdrawalRates = null,
   } = assumptions;
 
   const {
@@ -88,10 +92,10 @@ export function calcEmployeePUC(employee, assumptions) {
   const totalService = pastService + yearsToRetirement; // masa kerja total saat pensiun
 
   // Proyeksi gaji saat pensiun
-  const projectedSalaryAtRetirement = projectSalary(monthlyWage, yearsToRetirement, salaryIncreaseRate);
+  const projectedSalaryAtRetirement = projectSalary(monthlyWage, yearsToRetirement, salaryIncreaseYear1, salaryIncreaseLongTerm);
 
   // Bangun tabel dekremen
-  const decrementTable = buildDecrementTable(currentAge, retirementAge, disabilityFactor);
+  const decrementTable = buildDecrementTable(currentAge, retirementAge, disabilityFactor, withdrawalRates);
 
   // Hitung expected benefit pada berbagai skenario
   // Projected benefit obligation based on total service at retirement
@@ -118,7 +122,7 @@ export function calcEmployeePUC(employee, assumptions) {
     if (row.age >= retirementAge) break;
     const yearsFromNow = row.age - currentAge;
     const serviceAtDecrement = pastService + yearsFromNow;
-    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseRate);
+    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseYear1, salaryIncreaseLongTerm);
     const discountFactor = Math.pow(1 + discountRate, -(yearsFromNow + 0.5)); // mid-year
 
     // Porsi benefit yang sudah terakumulasi pada tanggal valuasi.
@@ -149,7 +153,7 @@ export function calcEmployeePUC(employee, assumptions) {
     if (row.age >= retirementAge) break;
     const yearsFromNow = row.age - currentAge;
     const serviceAtDecrement = pastService + yearsFromNow;
-    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseRate);
+    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseYear1, salaryIncreaseLongTerm);
 
     const amount =
       row.lx * row.qm * calcDeathBenefit(salaryAtDecrement, serviceAtDecrement) +
@@ -175,7 +179,7 @@ export function calcEmployeePUC(employee, assumptions) {
   for (const row of decrementTable) {
     if (row.age >= retirementAge) break;
     const yearsFromNow = row.age - currentAge;
-    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseRate);
+    const salaryAtDecrement = projectSalary(monthlyWage, yearsFromNow, salaryIncreaseYear1, salaryIncreaseLongTerm);
     const discountFactor = Math.pow(1 + discountRate, -(yearsFromNow + 0.5));
     const serviceAtDecrement = pastService + yearsFromNow;
 
@@ -242,20 +246,41 @@ export function calcMaturityAnalysis(employeeResults) {
 }
 
 /**
+ * Macaulay Duration dari expected cashflows per PSAK 219 Par. 147.
+ */
+function calcMacaulayDuration(employeeResults, discountRate) {
+  let sumPV_t = 0;
+  let sumPV = 0;
+
+  for (const result of employeeResults) {
+    for (const cf of (result.expectedCashflows ?? [])) {
+      if (cf.amount <= 0) continue;
+      const t = cf.year + 0.5; // mid-year convention
+      const pv = cf.amount * Math.pow(1 + discountRate, -t);
+      sumPV_t += t * pv;
+      sumPV += pv;
+    }
+  }
+
+  return sumPV > 0 ? sumPV_t / sumPV : 0;
+}
+
+/**
  * Hitung agregat seluruh karyawan
  */
-export function calcPortfolioPUC(employees, assumptions) {
+export function calcPortfolioPUC(employees, assumptions, priorPeriod = {}) {
   const results = employees.map(emp => calcEmployeePUC(emp, assumptions));
 
   const totalDBO = results.reduce((s, r) => s + r.dbo, 0);
   const totalCSC = results.reduce((s, r) => s + r.csc, 0);
-  const totalInterest = results.reduce((s, r) => s + r.interestCost, 0);
   const totalWage = employees.reduce((s, e) => s + e.monthlyWage, 0);
 
-  // Weighted average duration (simplified Macaulay)
-  const weightedDuration = results.length > 0
-    ? results.reduce((s, r) => s + r.yearsToRetirement * r.dbo, 0) / Math.max(totalDBO, 1)
-    : 0;
+  // Interest Cost = Opening DBO × opening discount rate (PSAK 219)
+  const openingDBO = priorPeriod.openingDBO || 0;
+  const openingRate = priorPeriod.openingDiscountRate || assumptions.discountRate;
+  const portfolioInterestCost = openingDBO * openingRate;
+
+  const weightedDuration = calcMacaulayDuration(results, assumptions.discountRate);
 
   return {
     employees: results,
@@ -264,7 +289,8 @@ export function calcPortfolioPUC(employees, assumptions) {
       totalWagePerMonth: totalWage,
       totalDBO,
       totalCSC,
-      totalInterestCost: totalInterest,
+      totalInterestCost: portfolioInterestCost,
+      estimatedNextInterestCost: totalDBO * assumptions.discountRate,
       weightedAverageDuration: weightedDuration,
       avgAge: employees.length > 0
         ? employees.reduce((s, e) => s + e.currentAge, 0) / employees.length
@@ -403,6 +429,35 @@ export function calcBalanceSheetReconciliation({
     benefitsPaid,
     employeeMutation,
     closingNetLiability,
+  };
+}
+
+/**
+ * Breakdown pengukuran kembali (remeasurement) — PSAK 219 Par. 141.
+ * Breakdown akurat memerlukan re-kalkulasi DBO dengan asumsi lama;
+ * fungsi ini menyediakan struktur yang dapat diisi manual jika tersedia.
+ */
+export function calcRemeasurementBreakdown({
+  actuarialGainLoss = 0,
+  openingDBO = 0,
+  closingDBO = 0,
+  expectedClosing = 0,
+  dboWithOldAssumptions = null,
+} = {}) {
+  // If dboWithOldAssumptions provided, split experience vs assumption change
+  const assumptionChange = dboWithOldAssumptions !== null
+    ? closingDBO - dboWithOldAssumptions
+    : null;
+  const experienceAdjustment = assumptionChange !== null
+    ? actuarialGainLoss - assumptionChange
+    : actuarialGainLoss;
+
+  return {
+    total: actuarialGainLoss,
+    experienceAdjustment,
+    financialAssumptionChange: assumptionChange ?? 0,
+    demographicAssumptionChange: 0,
+    hasDetail: dboWithOldAssumptions !== null,
   };
 }
 

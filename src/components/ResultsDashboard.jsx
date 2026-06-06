@@ -1,4 +1,5 @@
-import { fmt } from '../utils/format.js';
+import { fmt, rpBracket } from '../utils/format.js';
+import { AlertCircle } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell
@@ -6,13 +7,7 @@ import {
 
 const CHART_COLORS = ['#d4a853', '#4caf82', '#5b9bd5', '#e05555', '#a78bfa'];
 
-const PH = ({ children }) => (
-  <span style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 11 }}>
-    {children}
-  </span>
-);
-
-const SectionHeader = ({ label, children }) => (
+const SectionHeader = ({ label }) => (
   <tr>
     <td colSpan={3} style={{ textAlign: 'left', fontWeight: 600, paddingTop: 10, paddingBottom: 2, color: 'var(--text1)', borderBottom: '1px solid var(--border)' }}>
       {label}
@@ -20,12 +15,26 @@ const SectionHeader = ({ label, children }) => (
   </tr>
 );
 
-export default function ResultsDashboard({ result, assumptions = {}, company = {} }) {
+const NoPriorNote = () => (
+  <p style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 11, marginBottom: 8 }}>
+    Belum ada data periode lalu — isi di tab &quot;Data Periode Lalu&quot;
+  </p>
+);
+
+export default function ResultsDashboard({ result, assumptions = {}, company = {}, priorPeriod: _ignored }) {
   if (!result) return null;
-  const { summary, employees, sensitivity } = result;
+  const {
+    summary, employees, sensitivity,
+    reconciliationDBO, incomeStatement, oci, balanceSheet,
+    priorPeriod,
+  } = result;
+
   const period = company.period || `31 Desember ${new Date().getFullYear()}`;
   const discountRate = assumptions.discountRate ?? 0;
-  const totalExpense = summary.totalCSC + summary.totalInterestCost;
+  const totalExpense = incomeStatement
+    ? incomeStatement.totalExpenseAfterExcess
+    : summary.totalCSC + summary.totalInterestCost;
+  const noOpeningData = !priorPeriod || priorPeriod.openingDBO === 0;
 
   // DBO by age group
   const ageGroups = {};
@@ -54,8 +63,21 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
     );
   };
 
+  const isEstimated = employees.length > 0 && employees.every(e => e.isGenerated);
+
   return (
     <div>
+      {isEstimated && (
+        <div className="alert alert-warn" style={{ marginBottom: 16 }}>
+          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>
+            Hasil ini menggunakan <strong>data estimasi rata-rata</strong> —
+            deviasi ±15–25% dari perhitungan individu dimungkinkan.
+            Untuk laporan resmi, gunakan data karyawan individu.
+          </span>
+        </div>
+      )}
+
       {/* ── KPI tiles ─────────────────────────────────────────── */}
       <div className="stat-grid">
         <div className="stat-tile accent">
@@ -71,12 +93,12 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
         <div className="stat-tile">
           <div className="label">Biaya Bunga</div>
           <div className="value" style={{ fontSize: 16 }}>{fmt.rpShort(summary.totalInterestCost)}</div>
-          <div className="sub">DBO × Tingkat Diskonto</div>
+          <div className="sub">DBO Awal × Tingkat Diskonto</div>
         </div>
         <div className="stat-tile green">
           <div className="label">Total Beban Laba Rugi</div>
           <div className="value" style={{ fontSize: 16 }}>{fmt.rpShort(totalExpense)}</div>
-          <div className="sub">CSC + Biaya Bunga</div>
+          <div className="sub">CSC + Bunga + Jasa Lalu</div>
         </div>
         <div className="stat-tile">
           <div className="label">Jumlah Karyawan</div>
@@ -116,8 +138,7 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
               { label: 'Biaya Jasa Kini (CSC)', value: summary.totalCSC, color: 'var(--accent)' },
               { label: 'Biaya Bunga', value: summary.totalInterestCost, color: 'var(--blue)' },
             ].map(item => {
-              const total = totalExpense;
-              const pct = total > 0 ? (item.value / total * 100) : 0;
+              const pct = totalExpense > 0 ? (item.value / totalExpense * 100) : 0;
               return (
                 <div key={item.label} style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -169,6 +190,13 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
             </tbody>
           </table>
         </div>
+        {priorPeriod?.openingDBO > 0 && (
+          <p className="note" style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+            Perbandingan: DBO {summary.totalDBO >= priorPeriod.openingDBO ? 'naik' : 'turun'}{' '}
+            {fmt.pct(Math.abs((summary.totalDBO - priorPeriod.openingDBO) / priorPeriod.openingDBO))}{' '}
+            dari periode sebelumnya ({fmt.rpShort(priorPeriod.openingDBO)}).
+          </p>
+        )}
       </div>
 
       {/* ── B. Laporan Laba Rugi ──────────────────────────────── */}
@@ -187,24 +215,26 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
               <SectionHeader label="Biaya Jasa" />
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Kini</td>
-                <td className="num-accent">{fmt.rp(summary.totalCSC)}</td>
+                <td className="num-accent">{fmt.rp(incomeStatement?.currentServiceCost ?? summary.totalCSC)}</td>
                 <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Akrual tahun berjalan</td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Lalu</td>
-                <td style={{ color: 'var(--text3)' }}>—</td>
+                <td>{fmt.rp(incomeStatement?.pastServiceCost ?? 0)}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>(Keuntungan)/Kerugian atas Penyelesaian</td>
-                <td style={{ color: 'var(--text3)' }}>—</td>
+                <td>{fmt.rp(incomeStatement?.settlementGainLoss ?? 0)}</td>
                 <td />
               </tr>
               <SectionHeader label="Biaya Bunga" />
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Bunga atas Kewajiban Imbalan Pasti</td>
-                <td className="num-accent">{fmt.rp(summary.totalInterestCost)}</td>
-                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>DBO × {fmt.pct(discountRate)}</td>
+                <td className="num-accent">{fmt.rp(incomeStatement?.interestOnDBO ?? summary.totalInterestCost)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>
+                  DBO Awal × {fmt.pct(priorPeriod?.openingDiscountRate ?? discountRate)}
+                </td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>(Penghasilan)/Biaya Bunga atas Nilai Wajar Aset Program</td>
@@ -234,6 +264,7 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
       {/* ── C. Rekonsiliasi DBO ───────────────────────────────── */}
       <div className="card">
         <div className="card-title">C. Rekonsiliasi Nilai Kini Kewajiban Imbalan Pasti — Par. 140-141 PSAK 219</div>
+        {noOpeningData && <NoPriorNote />}
         <div className="table-wrap">
           <table>
             <thead>
@@ -246,27 +277,29 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
             <tbody>
               <tr>
                 <td style={{ textAlign: 'left' }}>DBO Awal Periode</td>
-                <td><PH>→ Isi dari laporan sebelumnya</PH></td>
+                <td>{fmt.rp(reconciliationDBO?.openingDBO ?? 0)}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Kini</td>
-                <td>{fmt.rp(summary.totalCSC)}</td>
+                <td>{fmt.rp(reconciliationDBO?.currentCSC ?? summary.totalCSC)}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Bunga atas DBO</td>
-                <td>{fmt.rp(summary.totalInterestCost)}</td>
-                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>DBO × {fmt.pct(discountRate)}</td>
+                <td>{fmt.rp(reconciliationDBO?.interestCost ?? summary.totalInterestCost)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>
+                  DBO Awal × {fmt.pct(priorPeriod?.openingDiscountRate ?? discountRate)}
+                </td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Biaya Jasa Lalu &amp; Settlement</td>
-                <td><PH>→ Isi dari data aktual</PH></td>
+                <td>{fmt.rp((reconciliationDBO?.pastServiceCost ?? 0) + (reconciliationDBO?.settlementGainLoss ?? 0))}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Mutasi Pegawai</td>
-                <td>{fmt.rp(0)}</td>
+                <td>{fmt.rp(reconciliationDBO?.employeeMutation ?? 0)}</td>
                 <td />
               </tr>
               <tr>
@@ -281,7 +314,7 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Imbalan Kerja yang Dibayarkan</td>
-                <td><PH>→ Isi dari data aktual</PH></td>
+                <td>{fmt.rp(-(reconciliationDBO?.benefitsPaid ?? 0))}</td>
                 <td />
               </tr>
               <tr>
@@ -291,17 +324,19 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
               </tr>
               <tr>
                 <td style={{ textAlign: 'left' }}>DBO Expected Akhir Periode</td>
-                <td><PH>→ Hitung dari data di atas</PH></td>
+                <td>{fmt.rp(reconciliationDBO?.expectedClosing ?? summary.totalDBO)}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left' }}>(Keuntungan)/Kerugian Aktuarial</td>
-                <td><PH>→ Selisih aktual vs expected</PH></td>
-                <td />
+                <td style={{ color: reconciliationDBO?.actuarialGainLoss > 0 ? 'var(--red)' : reconciliationDBO?.actuarialGainLoss < 0 ? 'var(--green)' : undefined }}>
+                  {fmt.rp(reconciliationDBO?.actuarialGainLoss ?? 0)}
+                </td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Aktual vs Expected</td>
               </tr>
               <tr className="row-total">
                 <td>DBO Aktual Akhir Periode</td>
-                <td>{fmt.rp(summary.totalDBO)}</td>
+                <td>{fmt.rp(reconciliationDBO?.closingDBO ?? summary.totalDBO)}</td>
                 <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 140-141</td>
               </tr>
             </tbody>
@@ -324,8 +359,8 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
             <tbody>
               <tr>
                 <td style={{ textAlign: 'left' }}>Keuntungan/(Kerugian) Aktuarial atas DBO</td>
-                <td><PH>→ Dari rekonsiliasi DBO</PH></td>
-                <td />
+                <td>{fmt.rp(oci?.actuarialGainLossOnDBO ?? 0)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Dari rekonsiliasi DBO</td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left' }}>Keuntungan/(Kerugian) Aktuarial atas Aset Program</td>
@@ -339,7 +374,7 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
               </tr>
               <tr className="row-total">
                 <td>Total Penghasilan Komprehensif Lain</td>
-                <td><PH>→ Dari rekonsiliasi DBO</PH></td>
+                <td>{fmt.rp(oci?.totalOCI ?? 0)}</td>
                 <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 57(d)</td>
               </tr>
             </tbody>
@@ -353,6 +388,7 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
       {/* ── E. Rekonsiliasi OCI ───────────────────────────────── */}
       <div className="card">
         <div className="card-title">E. Rekonsiliasi Penghasilan Komprehensif Lain</div>
+        {noOpeningData && <NoPriorNote />}
         <div className="table-wrap">
           <table>
             <thead>
@@ -365,17 +401,17 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
             <tbody>
               <tr>
                 <td style={{ textAlign: 'left' }}>Akumulasi OCI Awal Periode</td>
-                <td><PH>→ Isi dari laporan sebelumnya</PH></td>
+                <td>{fmt.rp(oci?.accumulatedOCIOpening ?? 0)}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>OCI Tahun Berjalan</td>
-                <td><PH>→ Dari tabel D</PH></td>
+                <td>{fmt.rp(oci?.totalOCI ?? 0)}</td>
                 <td />
               </tr>
               <tr className="row-total">
                 <td>Akumulasi OCI Akhir Periode</td>
-                <td><PH>→ Awal + Tahun berjalan</PH></td>
+                <td>{fmt.rp(oci?.accumulatedOCIClosing ?? 0)}</td>
                 <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 122</td>
               </tr>
             </tbody>
@@ -386,6 +422,7 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
       {/* ── F. Rekonsiliasi Balance Sheet ─────────────────────── */}
       <div className="card">
         <div className="card-title">F. Rekonsiliasi (Aset)/Kewajiban pada Laporan Posisi Keuangan</div>
+        {noOpeningData && <NoPriorNote />}
         <div className="table-wrap">
           <table>
             <thead>
@@ -398,18 +435,18 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
             <tbody>
               <tr>
                 <td style={{ textAlign: 'left' }}>(Aset)/Kewajiban Awal Periode</td>
-                <td><PH>→ Isi dari laporan sebelumnya</PH></td>
+                <td>{fmt.rp(balanceSheet?.openingNetLiability ?? 0)}</td>
                 <td />
               </tr>
               <tr>
-                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Beban Laba Rugi (CSC + Biaya Bunga)</td>
-                <td>{fmt.rp(totalExpense)}</td>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Beban Laba Rugi (CSC + Bunga + Jasa Lalu)</td>
+                <td>{fmt.rp(balanceSheet?.expenseRecognized ?? totalExpense)}</td>
                 <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Dari tabel B</td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Penghasilan Komprehensif Lain (OCI)</td>
-                <td><PH>→ Dari tabel D</PH></td>
-                <td />
+                <td>{fmt.rp(balanceSheet?.totalOCI ?? 0)}</td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Dari tabel D</td>
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Iuran Perusahaan</td>
@@ -418,17 +455,17 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Imbalan Kerja Dibayarkan</td>
-                <td><PH>→ Isi dari data aktual</PH></td>
+                <td>{fmt.rp(-(balanceSheet?.benefitsPaid ?? 0))}</td>
                 <td />
               </tr>
               <tr>
                 <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Mutasi Pegawai</td>
-                <td>{fmt.rp(0)}</td>
+                <td>{fmt.rp(balanceSheet?.employeeMutation ?? 0)}</td>
                 <td />
               </tr>
               <tr className="row-total">
                 <td>(Aset)/Kewajiban Akhir Periode</td>
-                <td>{fmt.rp(summary.totalDBO)}</td>
+                <td>{fmt.rp(balanceSheet?.closingNetLiability ?? summary.totalDBO)}</td>
                 <td style={{ fontFamily: 'var(--font-body)', fontSize: 11 }}>Par. 57(a)&amp;(b)</td>
               </tr>
             </tbody>
@@ -463,10 +500,61 @@ export default function ResultsDashboard({ result, assumptions = {}, company = {
         </div>
       )}
 
-      {/* ── H. Analisis Jatuh Tempo ───────────────────────────── */}
+      {/* ── H. Pengukuran Kembali ─────────────────────────────── */}
+      <div className="card">
+        <div className="card-title">H. Pengukuran Kembali (Keuntungan)/Kerugian Aktuaria — Par. 141 PSAK 219</div>
+        {noOpeningData && <NoPriorNote />}
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Keterangan</th>
+                <th>{period}</th>
+                <th style={{ textAlign: 'left', paddingLeft: 16, color: 'var(--text3)' }}>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="row-total">
+                <td style={{ textAlign: 'left' }}>(Keuntungan)/Kerugian Aktuarial — Total</td>
+                <td style={{ color: reconciliationDBO?.actuarialGainLoss > 0 ? 'var(--red)' : reconciliationDBO?.actuarialGainLoss < 0 ? 'var(--green)' : undefined }}>
+                  {rpBracket(reconciliationDBO?.actuarialGainLoss ?? 0)}
+                </td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Dari rekonsiliasi DBO</td>
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Penyesuaian Pengalaman atas Liabilitas</td>
+                <td style={{ color: 'var(--text3)', fontStyle: 'italic' }}>
+                  {noOpeningData ? '—' : '→ Dari analisis detail'}
+                </td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Aktual vs proyeksi</td>
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Perubahan Asumsi Keuangan</td>
+                <td style={{ color: 'var(--text3)', fontStyle: 'italic' }}>
+                  {noOpeningData ? '—' : '→ Dari analisis detail'}
+                </td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Δ tingkat diskonto & upah</td>
+              </tr>
+              <tr>
+                <td style={{ textAlign: 'left', paddingLeft: 24 }}>Dampak Perubahan Asumsi Demografis</td>
+                <td style={{ color: 'var(--text3)', fontStyle: 'italic' }}>
+                  {noOpeningData ? '—' : '→ Dari analisis detail'}
+                </td>
+                <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text3)' }}>Δ mortalita, pengunduran diri</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic', marginTop: 8 }}>
+          Breakdown penyesuaian pengalaman vs perubahan asumsi memerlukan re-kalkulasi DBO dengan asumsi periode sebelumnya.
+          {noOpeningData && ' Isi data periode lalu untuk mengaktifkan rekonsiliasi.'}
+        </p>
+      </div>
+
+      {/* ── I. Analisis Jatuh Tempo ───────────────────────────── */}
       {summary.maturity?.length > 0 && (
         <div className="card">
-          <div className="card-title">H. Analisis Jatuh Tempo Pembayaran Imbalan — PSAK 219</div>
+          <div className="card-title">I. Analisis Jatuh Tempo Pembayaran Imbalan — PSAK 219</div>
           <div className="table-wrap">
             <table>
               <thead>

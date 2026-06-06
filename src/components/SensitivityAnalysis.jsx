@@ -8,7 +8,7 @@ import {
 
 export default function SensitivityAnalysis({ employees, baseAssumptions, baseResult }) {
   const [discountSlider, setDiscountSlider] = useState(baseAssumptions.discountRate * 100);
-  const [salarySlider, setSalarySlider] = useState(baseAssumptions.salaryIncreaseRate * 100);
+  const [salarySlider, setSalarySlider] = useState(baseAssumptions.salaryIncreaseLongTerm * 100);
   const [liveResult, setLiveResult] = useState(null);
   const [chartData, setChartData] = useState([]);
 
@@ -21,7 +21,8 @@ export default function SensitivityAnalysis({ employees, baseAssumptions, baseRe
     const assumptions = {
       ...baseAssumptions,
       discountRate: discount / 100,
-      salaryIncreaseRate: salary / 100,
+      salaryIncreaseYear1: baseAssumptions.salaryIncreaseYear1 + (salary / 100 - baseAssumptions.salaryIncreaseLongTerm),
+      salaryIncreaseLongTerm: salary / 100,
     };
     const result = calcPortfolioPUC(employees, assumptions);
     setLiveResult(result.summary);
@@ -40,7 +41,8 @@ export default function SensitivityAnalysis({ employees, baseAssumptions, baseRe
       const r1 = calcPortfolioPUC(employees, { ...baseAssumptions, discountRate: dr });
       const r2 = calcPortfolioPUC(employees, {
         ...baseAssumptions,
-        salaryIncreaseRate: (baseAssumptions.salaryIncreaseRate * 100 + d) / 100,
+        salaryIncreaseYear1: baseAssumptions.salaryIncreaseYear1 + d / 100,
+        salaryIncreaseLongTerm: baseAssumptions.salaryIncreaseLongTerm + d / 100,
       });
       points.push({
         delta: d === 0 ? '0 (Base)' : (d > 0 ? `+${d}%` : `${d}%`),
@@ -109,7 +111,7 @@ export default function SensitivityAnalysis({ employees, baseAssumptions, baseRe
               onChange={e => setSalarySlider(parseFloat(e.target.value))}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text3)' }}>
-              <span>0%</span><span>Base: {(baseAssumptions.salaryIncreaseRate * 100).toFixed(2)}%</span><span>20%</span>
+              <span>0%</span><span>Base: {(baseAssumptions.salaryIncreaseLongTerm * 100).toFixed(2)}%</span><span>20%</span>
             </div>
           </div>
         </div>
@@ -183,14 +185,19 @@ export default function SensitivityAnalysis({ employees, baseAssumptions, baseRe
             </thead>
             <tbody>
               {[
-                { label: 'Asumsi Dasar', discount: baseAssumptions.discountRate, salary: baseAssumptions.salaryIncreaseRate },
-                { label: `Diskonto +1% (${((baseAssumptions.discountRate + 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate + 0.01, salary: baseAssumptions.salaryIncreaseRate },
-                { label: `Diskonto −1% (${((baseAssumptions.discountRate - 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate - 0.01, salary: baseAssumptions.salaryIncreaseRate },
-                { label: `Kenaikan Upah +1% (${((baseAssumptions.salaryIncreaseRate + 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate, salary: baseAssumptions.salaryIncreaseRate + 0.01 },
-                { label: `Kenaikan Upah −1% (${((baseAssumptions.salaryIncreaseRate - 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate, salary: baseAssumptions.salaryIncreaseRate - 0.01 },
+                { label: 'Asumsi Dasar', discount: baseAssumptions.discountRate, salaryDelta: 0 },
+                { label: `Diskonto +1% (${((baseAssumptions.discountRate + 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate + 0.01, salaryDelta: 0 },
+                { label: `Diskonto −1% (${((baseAssumptions.discountRate - 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate - 0.01, salaryDelta: 0 },
+                { label: `Kenaikan Upah +1% (LT: ${((baseAssumptions.salaryIncreaseLongTerm + 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate, salaryDelta: 0.01 },
+                { label: `Kenaikan Upah −1% (LT: ${((baseAssumptions.salaryIncreaseLongTerm - 0.01) * 100).toFixed(2)}%)`, discount: baseAssumptions.discountRate, salaryDelta: -0.01 },
               ].map((scenario, i) => {
                 if (scenario.discount <= 0) return null;
-                const r = calcPortfolioPUC(employees, { ...baseAssumptions, discountRate: scenario.discount, salaryIncreaseRate: scenario.salary });
+                const r = calcPortfolioPUC(employees, {
+                  ...baseAssumptions,
+                  discountRate: scenario.discount,
+                  salaryIncreaseYear1: Math.max(0, baseAssumptions.salaryIncreaseYear1 + scenario.salaryDelta),
+                  salaryIncreaseLongTerm: Math.max(0, baseAssumptions.salaryIncreaseLongTerm + scenario.salaryDelta),
+                });
                 const dbo = r.summary.totalDBO;
                 const csc = r.summary.totalCSC;
                 const delta = dbo - baseDBO;
@@ -228,22 +235,13 @@ export default function SensitivityAnalysis({ employees, baseAssumptions, baseRe
             </thead>
             <tbody>
               {(() => {
-                const buckets = { '<1': 0, '1–2': 0, '2–5': 0, '5–10': 0, '≥10': 0 };
-                employees.forEach(e => {
-                  const y = e.yearsToRetirement;
-                  const b = e.projectedRetirementBenefit * e.probSurviveToRetirement;
-                  if (y < 1) buckets['<1'] += b;
-                  else if (y < 2) buckets['1–2'] += b;
-                  else if (y < 5) buckets['2–5'] += b;
-                  else if (y < 10) buckets['5–10'] += b;
-                  else buckets['≥10'] += b;
-                });
-                const total = Object.values(buckets).reduce((a, b) => a + b, 0);
-                return Object.entries(buckets).map(([k, v]) => (
-                  <tr key={k}>
-                    <td style={{ textAlign: 'left' }}>{k}</td>
-                    <td>{fmt.rp(v)}</td>
-                    <td style={{ color: 'var(--text2)' }}>{total > 0 ? (v / total * 100).toFixed(1) : 0}%</td>
+                const maturity = baseResult.summary.maturity;
+                const total = maturity.reduce((s, b) => s + b.amount, 0);
+                return maturity.map(b => (
+                  <tr key={b.label}>
+                    <td style={{ textAlign: 'left' }}>{b.label}</td>
+                    <td>{fmt.rp(b.amount)}</td>
+                    <td style={{ color: 'var(--text2)' }}>{total > 0 ? (b.amount / total * 100).toFixed(1) : 0}%</td>
                   </tr>
                 ));
               })()}
